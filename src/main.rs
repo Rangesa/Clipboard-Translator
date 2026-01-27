@@ -18,6 +18,7 @@ const HOTKEY_POLL_INTERVAL_MS: u64 = 100;
 
 mod clipboard;
 mod config;
+mod credential;
 mod gemini;
 mod hotkey;
 mod startup;
@@ -66,16 +67,14 @@ fn print_help() {
     println!("スタートアップ登録状態: {}", if startup::is_installed() { "登録済み" } else { "未登録" });
 }
 
-/// 同じプロセス内で翻訳UIを表示
-fn show_translation_ui(clipboard_text: &str, config: &config::Config) -> Result<()> {
-    // チャンネル作成
+/// バックグラウンドで翻訳タスクを起動し、結果を受信するReceiverを返す
+fn spawn_translation_task(
+    text: String,
+    api_key: String,
+    model: String,
+    output_mode: config::OutputMode,
+) -> mpsc::Receiver<Result<String, String>> {
     let (tx, rx) = mpsc::channel::<Result<String, String>>();
-
-    // バックグラウンドでAPI呼び出し
-    let api_key = config.api_key.clone();
-    let model = config.model.clone();
-    let output_mode = config.output_mode;
-    let text = clipboard_text.to_string();
 
     thread::spawn(move || {
         let rt = match Runtime::new() {
@@ -92,6 +91,18 @@ fn show_translation_ui(clipboard_text: &str, config: &config::Config) -> Result<
         let _ = tx.send(result.map_err(|e| e.to_string()));
     });
 
+    rx
+}
+
+/// 同じプロセス内で翻訳UIを表示
+fn show_translation_ui(clipboard_text: &str, config: &config::Config) -> Result<()> {
+    let rx = spawn_translation_task(
+        clipboard_text.to_string(),
+        config.api_key.clone(),
+        config.model.clone(),
+        config.output_mode,
+    );
+
     // UIを表示（ブロッキング）
     ui::result::show_result_with_receiver(rx)?;
 
@@ -106,28 +117,12 @@ fn run_translate_mode() -> Result<()> {
     // 設定読み込み
     let config = config::load_or_create()?;
 
-    // チャンネル作成
-    let (tx, rx) = mpsc::channel::<Result<String, String>>();
-
-    // バックグラウンドでAPI呼び出し
-    let api_key = config.api_key.clone();
-    let model = config.model.clone();
-    let output_mode = config.output_mode;
-
-    thread::spawn(move || {
-        let rt = match Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                let _ = tx.send(Err(format!("Tokioランタイム作成失敗: {}", e)));
-                return;
-            }
-        };
-        let client = gemini::GeminiClient::new(api_key, model, output_mode);
-
-        let result = rt.block_on(async { client.translate_and_explain(&clipboard_text).await });
-
-        let _ = tx.send(result.map_err(|e| e.to_string()));
-    });
+    let rx = spawn_translation_task(
+        clipboard_text,
+        config.api_key.clone(),
+        config.model.clone(),
+        config.output_mode,
+    );
 
     // ローディング表示付きのウィンドウを表示
     ui::result::show_result_with_receiver(rx)?;

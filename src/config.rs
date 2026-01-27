@@ -43,12 +43,12 @@ pub struct Hotkey {
 
 impl Default for Hotkey {
     fn default() -> Self {
-        // デフォルトは Ctrl+Shift+T (VK_T = 0x54)
+        // デフォルトは Ctrl+C (VK_C = 0x43)
         Self {
             ctrl: true,
             alt: false,
-            shift: true,
-            key_code: 0x54, // VK_T
+            shift: false,
+            key_code: 0x43, // VK_C
         }
     }
 }
@@ -86,6 +86,7 @@ impl Hotkey {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(skip)]
     pub api_key: String,
     #[serde(default = "default_model")]
     pub model: String,
@@ -121,18 +122,39 @@ pub fn config_path() -> Result<PathBuf> {
 pub fn load_or_create() -> Result<Config> {
     let path = config_path()?;
 
-    if path.exists() {
+    let mut config = if path.exists() {
         let content = fs::read_to_string(&path)?;
-        let config: Config = serde_json::from_str(&content)?;
-        Ok(config)
+
+        // 旧形式（api_keyがJSONに含まれている）の場合は移行処理
+        if let Ok(old_config) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(api_key) = old_config.get("api_key").and_then(|v| v.as_str()) {
+                if !api_key.is_empty() {
+                    // Credential Managerに保存
+                    crate::credential::save_api_key(api_key)?;
+                }
+            }
+        }
+
+        serde_json::from_str(&content)?
     } else {
         let config = Config::default();
         save(&config)?;
-        Ok(config)
-    }
+        config
+    };
+
+    // Credential ManagerからAPIキーを読み込み
+    config.api_key = crate::credential::load_api_key().unwrap_or_default();
+
+    Ok(config)
 }
 
 pub fn save(config: &Config) -> Result<()> {
+    // APIキーはCredential Managerに保存
+    if !config.api_key.is_empty() {
+        crate::credential::save_api_key(&config.api_key)?;
+    }
+
+    // 設定ファイルにはAPIキー以外を保存
     let path = config_path()?;
     let json = serde_json::to_string_pretty(config)?;
     fs::write(path, json)?;

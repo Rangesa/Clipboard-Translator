@@ -8,6 +8,7 @@
   - フォント設定を `ui/common.rs` に統合し、重複コードを削除
   - マジックナンバーを定数化（`DOUBLE_PRESS_WINDOW_MS`, `DEBOUNCE_DELAY_MS`, `HOTKEY_POLL_INTERVAL_MS`）
   - `unwrap()` をより安全なエラーハンドリングに置換（Mutex lock、Tokio Runtime作成時）
+  - API呼び出しロジックを共通関数 `spawn_translation_task()` に抽出
 - **パフォーマンス改善**
   - **マルチプロセスからシングルプロセス方式に変更**
   - 翻訳UI表示時にプロセス起動のオーバーヘッドを削減（約100-200ms高速化）
@@ -18,10 +19,14 @@
 - **ホットキーカスタマイズ機能**: ユーザーが任意のキーコンビネーションを設定可能
   - 設定画面でボタンをクリック→キー入力→自動記録
   - Ctrl、Alt、Shiftと任意のキー（A-Z、0-9、F1-F12）の組み合わせに対応
-  - デフォルトは `Ctrl+Shift+T`
+  - デフォルトは `Ctrl+C`（1回押し）
 - **シングルインスタンス制限**: Named Mutexによる多重起動防止
   - バックグラウンド監視モードで既に起動している場合、警告を表示して終了
   - 設定画面（`--setup`）や内部プロセスは複数起動可能
+- **セキュリティ強化**: Windows Credential ManagerによるAPIキー保存
+  - APIキーをプレーンテキストではなくWindows Credential Managerに保存
+  - 既存のconfig.jsonからの自動移行機能
+  - config.jsonにはモデル名やホットキーのみ保存
 - **APIキー検証表示**: モデル取得成功時に「APIキーは有効です」と表示
 - **APIタイムアウト**: 30秒のタイムアウトを設定（`API_TIMEOUT_SECS`）
 
