@@ -4,8 +4,64 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use super::common::setup_japanese_fonts;
-use crate::config::{self, Config, OutputMode, DEFAULT_MODEL, FALLBACK_MODELS};
+use crate::config::{self, Config, Hotkey, OutputMode, DEFAULT_MODEL, FALLBACK_MODELS};
 use crate::gemini::{fetch_available_models, ModelInfo};
+
+/// egui::KeyをWindows VKコードに変換
+fn key_to_vk_code(key: egui::Key) -> Option<i32> {
+    use egui::Key;
+    match key {
+        Key::A => Some(0x41),
+        Key::B => Some(0x42),
+        Key::C => Some(0x43),
+        Key::D => Some(0x44),
+        Key::E => Some(0x45),
+        Key::F => Some(0x46),
+        Key::G => Some(0x47),
+        Key::H => Some(0x48),
+        Key::I => Some(0x49),
+        Key::J => Some(0x4A),
+        Key::K => Some(0x4B),
+        Key::L => Some(0x4C),
+        Key::M => Some(0x4D),
+        Key::N => Some(0x4E),
+        Key::O => Some(0x4F),
+        Key::P => Some(0x50),
+        Key::Q => Some(0x51),
+        Key::R => Some(0x52),
+        Key::S => Some(0x53),
+        Key::T => Some(0x54),
+        Key::U => Some(0x55),
+        Key::V => Some(0x56),
+        Key::W => Some(0x57),
+        Key::X => Some(0x58),
+        Key::Y => Some(0x59),
+        Key::Z => Some(0x5A),
+        Key::Num0 => Some(0x30),
+        Key::Num1 => Some(0x31),
+        Key::Num2 => Some(0x32),
+        Key::Num3 => Some(0x33),
+        Key::Num4 => Some(0x34),
+        Key::Num5 => Some(0x35),
+        Key::Num6 => Some(0x36),
+        Key::Num7 => Some(0x37),
+        Key::Num8 => Some(0x38),
+        Key::Num9 => Some(0x39),
+        Key::F1 => Some(0x70),
+        Key::F2 => Some(0x71),
+        Key::F3 => Some(0x72),
+        Key::F4 => Some(0x73),
+        Key::F5 => Some(0x74),
+        Key::F6 => Some(0x75),
+        Key::F7 => Some(0x76),
+        Key::F8 => Some(0x77),
+        Key::F9 => Some(0x78),
+        Key::F10 => Some(0x79),
+        Key::F11 => Some(0x7A),
+        Key::F12 => Some(0x7B),
+        _ => None,
+    }
+}
 
 enum ModelLoadState {
     NotLoaded,
@@ -18,6 +74,8 @@ struct SetupApp {
     api_key: String,
     selected_model_id: String,
     output_mode: OutputMode,
+    hotkey: Hotkey,
+    listening_for_hotkey: bool,
     models: ModelLoadState,
     model_receiver: Option<Receiver<Result<Vec<ModelInfo>, String>>>,
     error_message: Option<String>,
@@ -27,15 +85,17 @@ struct SetupApp {
 
 impl SetupApp {
     fn new() -> Self {
-        let (api_key, selected_model_id, output_mode) = match config::load_or_create() {
-            Ok(cfg) => (cfg.api_key, cfg.model, cfg.output_mode),
-            Err(_) => (String::new(), DEFAULT_MODEL.to_string(), OutputMode::default()),
+        let (api_key, selected_model_id, output_mode, hotkey) = match config::load_or_create() {
+            Ok(cfg) => (cfg.api_key, cfg.model, cfg.output_mode, cfg.hotkey),
+            Err(_) => (String::new(), DEFAULT_MODEL.to_string(), OutputMode::default(), Hotkey::default()),
         };
 
         Self {
             api_key,
             selected_model_id,
             output_mode,
+            hotkey,
+            listening_for_hotkey: false,
             models: ModelLoadState::NotLoaded,
             model_receiver: None,
             error_message: None,
@@ -114,6 +174,32 @@ impl SetupApp {
 
 impl eframe::App for SetupApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ホットキー入力待ちの場合、キーを記録
+        if self.listening_for_hotkey {
+            ctx.input(|i| {
+                for event in &i.events {
+                    if let egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } = event
+                    {
+                        // egui::Keyをi32のVKコードに変換
+                        if let Some(vk_code) = key_to_vk_code(*key) {
+                            self.hotkey = Hotkey {
+                                ctrl: modifiers.ctrl,
+                                alt: modifiers.alt,
+                                shift: modifiers.shift,
+                                key_code: vk_code,
+                            };
+                            self.listening_for_hotkey = false;
+                        }
+                    }
+                }
+            });
+        }
+
         // モデル取得の完了をチェック
         self.check_model_fetch();
 
@@ -227,6 +313,27 @@ impl eframe::App for SetupApp {
                     });
             });
 
+            ui.add_space(15.0);
+
+            // ホットキー設定
+            ui.horizontal(|ui| {
+                ui.label("ホットキー:");
+                let hotkey_text = if self.listening_for_hotkey {
+                    "キーを押してください...".to_string()
+                } else {
+                    self.hotkey.to_string()
+                };
+
+                if ui.button(&hotkey_text).clicked() {
+                    self.listening_for_hotkey = true;
+                }
+
+                if ui.button("リセット").clicked() {
+                    self.hotkey = Hotkey::default();
+                    self.listening_for_hotkey = false;
+                }
+            });
+
             ui.add_space(10.0);
             ui.hyperlink_to(
                 "Google AI Studio でAPIキーを取得",
@@ -260,6 +367,7 @@ impl eframe::App for SetupApp {
                                 api_key: self.api_key.clone(),
                                 model: self.selected_model_id.clone(),
                                 output_mode: self.output_mode,
+                                hotkey: self.hotkey,
                             };
 
                             match config::save(&config) {

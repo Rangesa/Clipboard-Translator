@@ -4,17 +4,17 @@
 use anyhow::Result;
 use std::env;
 use std::io::{self, Read};
-use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::sync::{LazyLock, Mutex};
 use std::thread;
 use std::time::Duration;
 use tokio::runtime::Runtime;
+use windows::Win32::Foundation::HWND;
+use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
+use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
+use windows::core::w;
 
 /// ホットキー監視のポーリング間隔
 const HOTKEY_POLL_INTERVAL_MS: u64 = 100;
-
-static RESULT_PROCESS: LazyLock<Mutex<Option<Child>>> = LazyLock::new(|| Mutex::new(None));
 
 mod clipboard;
 mod config;
@@ -22,6 +22,31 @@ mod gemini;
 mod hotkey;
 mod startup;
 mod ui;
+
+/// シングルインスタンスチェック
+/// 既に起動している場合はfalseを返す
+fn check_single_instance() -> bool {
+    unsafe {
+        let mutex_name = w!("Global\\ClipboardTranslator_SingleInstance");
+
+        // まず既存のMutexを開こうとする
+        if let Ok(_existing) = OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, mutex_name) {
+            // 既に起動している
+            MessageBoxW(
+                HWND(0),
+                w!("Clipboard Translatorは既に起動しています。"),
+                w!("起動エラー"),
+                MB_OK | MB_ICONWARNING,
+            );
+            return false;
+        }
+
+        // 開けなかった場合は新規作成
+        let _mutex = CreateMutexW(None, true, mutex_name);
+
+        true
+    }
+}
 
 fn print_help() {
     println!("Clipboard Translator - Ctrl+C+C で翻訳");
@@ -41,31 +66,34 @@ fn print_help() {
     println!("スタートアップ登録状態: {}", if startup::is_installed() { "登録済み" } else { "未登録" });
 }
 
-fn spawn_result_process(clipboard_text: &str) -> Result<()> {
-    // 既存の結果ウィンドウプロセスを終了
-    if let Ok(mut guard) = RESULT_PROCESS.lock() {
-        if let Some(mut old_process) = guard.take() {
-            let _ = old_process.kill();
-            let _ = old_process.wait();
-        }
-    }
+/// 同じプロセス内で翻訳UIを表示
+fn show_translation_ui(clipboard_text: &str, config: &config::Config) -> Result<()> {
+    // チャンネル作成
+    let (tx, rx) = mpsc::channel::<Result<String, String>>();
 
-    let exe_path = env::current_exe()?;
+    // バックグラウンドでAPI呼び出し
+    let api_key = config.api_key.clone();
+    let model = config.model.clone();
+    let output_mode = config.output_mode;
+    let text = clipboard_text.to_string();
 
-    let mut child = Command::new(exe_path)
-        .arg("--translate")
-        .stdin(Stdio::piped())
-        .spawn()?;
+    thread::spawn(move || {
+        let rt = match Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = tx.send(Err(format!("Tokioランタイム作成失敗: {}", e)));
+                return;
+            }
+        };
+        let client = gemini::GeminiClient::new(api_key, model, output_mode);
 
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        stdin.write_all(clipboard_text.as_bytes())?;
-    }
+        let result = rt.block_on(async { client.translate_and_explain(&text).await });
 
-    // 新しいプロセスを保存
-    if let Ok(mut guard) = RESULT_PROCESS.lock() {
-        *guard = Some(child);
-    }
+        let _ = tx.send(result.map_err(|e| e.to_string()));
+    });
+
+    // UIを表示（ブロッキング）
+    ui::result::show_result_with_receiver(rx)?;
 
     Ok(())
 }
@@ -154,6 +182,11 @@ fn main() -> Result<()> {
         }
     }
 
+    // シングルインスタンスチェック（バックグラウンド監視モードのみ）
+    if !check_single_instance() {
+        return Ok(());
+    }
+
     // 設定読み込み
     let config = config::load_or_create()?;
 
@@ -165,20 +198,21 @@ fn main() -> Result<()> {
 
     // ホットキー監視ループ
     println!(
-        "Clipboard Translator started. Model: {}. Press Ctrl+C+C to translate.",
-        config.model
+        "Clipboard Translator started. Model: {}. Hotkey: {}",
+        config.model,
+        config.hotkey.to_string()
     );
 
     loop {
-        if hotkey::is_ctrl_c_c_pressed() {
+        if hotkey::is_hotkey_pressed(&config.hotkey) {
             // クリップボード取得
             match clipboard::get_text() {
                 Ok(text) if !text.trim().is_empty() => {
-                    println!("Detected Ctrl+C+C. Processing clipboard content...");
+                    println!("Hotkey detected. Processing clipboard content...");
 
-                    // 別プロセスで翻訳とウィンドウ表示を実行
-                    if let Err(e) = spawn_result_process(&text) {
-                        eprintln!("Failed to spawn result process: {}", e);
+                    // 同じプロセス内で翻訳UIを表示（ブロッキング）
+                    if let Err(e) = show_translation_ui(&text, &config) {
+                        eprintln!("Failed to show translation UI: {}", e);
                     }
                 }
                 Ok(_) => {} // 空のクリップボードは無視
