@@ -1,0 +1,22 @@
+# Generated Artifacts
+/target/
+source_dump/
+
+# User Configuration (Critical: Contains API Keys)
+config.json
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Build artifacts
+*.exe
+*.pdb
+*.log
+
+.claude/
+
+nul
