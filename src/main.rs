@@ -4,7 +4,9 @@
 use anyhow::Result;
 use std::env;
 use std::io::{self, Read};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -21,6 +23,8 @@ mod config;
 mod credential;
 mod gemini;
 mod hotkey;
+mod hotkey_hook;
+mod notification;
 mod startup;
 mod ui;
 
@@ -94,19 +98,29 @@ fn spawn_translation_task(
     rx
 }
 
-/// 同じプロセス内で翻訳UIを表示
-fn show_translation_ui(clipboard_text: &str, config: &config::Config) -> Result<()> {
-    let rx = spawn_translation_task(
-        clipboard_text.to_string(),
-        config.api_key.clone(),
-        config.model.clone(),
-        config.output_mode,
-    );
+/// 別スレッドで翻訳UIを表示（非ブロッキング）
+fn show_translation_ui_async(
+    clipboard_text: String,
+    config: config::Config,
+    is_translating: Arc<AtomicBool>,
+) {
+    thread::spawn(move || {
+        let rx = spawn_translation_task(
+            clipboard_text,
+            config.api_key.clone(),
+            config.model.clone(),
+            config.output_mode,
+        );
 
-    // UIを表示（ブロッキング）
-    ui::result::show_result_with_receiver(rx)?;
-
-    Ok(())
+        // UIを表示（このスレッド内でブロッキング）
+        // 翻訳結果が表示された時点で、UI側でフラグをクリアする
+        if let Err(e) = ui::result::show_result_with_receiver(rx, Some(is_translating.clone())) {
+            eprintln!("Failed to show translation UI: {}", e);
+            notification::show_error("エラー", "翻訳ウィンドウの表示に失敗しました");
+            // エラー時もフラグをクリア
+            is_translating.store(false, Ordering::SeqCst);
+        }
+    });
 }
 
 fn run_translate_mode() -> Result<()> {
@@ -125,7 +139,7 @@ fn run_translate_mode() -> Result<()> {
     );
 
     // ローディング表示付きのウィンドウを表示
-    ui::result::show_result_with_receiver(rx)?;
+    ui::result::show_result_with_receiver(rx, None)?;
 
     Ok(())
 }
@@ -198,20 +212,45 @@ fn main() -> Result<()> {
         config.hotkey.to_string()
     );
 
+    // 翻訳中フラグ（スレッド間で共有）
+    let is_translating = Arc::new(AtomicBool::new(false));
+
+    // Low-Level Hook を別スレッドで起動
+    let hook_hotkey = config.hotkey;
+    thread::spawn(move || {
+        if let Err(e) = hotkey_hook::start_hook(hook_hotkey) {
+            eprintln!("Failed to start keyboard hook: {}", e);
+            notification::show_error("エラー", "キーボードフックの開始に失敗しました");
+        }
+    });
+
+    // メインループ：フックからのトリガーをチェック
     loop {
-        if hotkey::is_hotkey_pressed(&config.hotkey) {
+        if hotkey_hook::check_triggered() {
+            // 既に翻訳中かチェック
+            if is_translating.load(Ordering::SeqCst) {
+                println!("Translation already in progress, ignoring hotkey");
+                notification::show_info("翻訳実行中です");
+                thread::sleep(Duration::from_millis(HOTKEY_POLL_INTERVAL_MS));
+                continue;
+            }
+
             // クリップボード取得
             match clipboard::get_text() {
                 Ok(text) if !text.trim().is_empty() => {
                     println!("Hotkey detected. Processing clipboard content...");
 
-                    // 同じプロセス内で翻訳UIを表示（ブロッキング）
-                    if let Err(e) = show_translation_ui(&text, &config) {
-                        eprintln!("Failed to show translation UI: {}", e);
-                    }
+                    // 翻訳中フラグをセット
+                    is_translating.store(true, Ordering::SeqCst);
+
+                    // 別スレッドで翻訳UIを表示（非ブロッキング）
+                    show_translation_ui_async(text, config.clone(), Arc::clone(&is_translating));
                 }
                 Ok(_) => {} // 空のクリップボードは無視
-                Err(e) => eprintln!("Clipboard error: {}", e),
+                Err(e) => {
+                    eprintln!("Clipboard error: {}", e);
+                    notification::show_error("エラー", "クリップボードの取得に失敗しました");
+                }
             }
         }
 

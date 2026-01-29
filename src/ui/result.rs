@@ -1,7 +1,9 @@
 use anyhow::Result;
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
@@ -17,6 +19,7 @@ struct ResultApp {
     state: ContentState,
     receiver: Option<Receiver<Result<String, String>>>,
     markdown_cache: CommonMarkCache,
+    is_translating: Option<Arc<AtomicBool>>,
 }
 
 impl eframe::App for ResultApp {
@@ -26,8 +29,22 @@ impl eframe::App for ResultApp {
             match rx.try_recv() {
                 Ok(result) => {
                     match result {
-                        Ok(content) => self.state = ContentState::Ready(content),
-                        Err(e) => self.state = ContentState::Error(e),
+                        Ok(content) => {
+                            self.state = ContentState::Ready(content);
+                            // 翻訳完了、フラグをクリア
+                            if let Some(ref flag) = self.is_translating {
+                                flag.store(false, Ordering::SeqCst);
+                            }
+                        }
+                        Err(e) => {
+                            // トースト通知でもエラーを表示
+                            crate::notification::show_error("API エラー", &e);
+                            self.state = ContentState::Error(e);
+                            // エラーでもフラグをクリア
+                            if let Some(ref flag) = self.is_translating {
+                                flag.store(false, Ordering::SeqCst);
+                            }
+                        }
                     }
                     self.receiver = None;
                 }
@@ -38,6 +55,10 @@ impl eframe::App for ResultApp {
                 Err(TryRecvError::Disconnected) => {
                     self.state = ContentState::Error("接続が切断されました".to_string());
                     self.receiver = None;
+                    // エラーでもフラグをクリア
+                    if let Some(ref flag) = self.is_translating {
+                        flag.store(false, Ordering::SeqCst);
+                    }
                 }
             }
         }
@@ -91,7 +112,10 @@ fn get_cursor_position() -> (f32, f32) {
     }
 }
 
-pub fn show_result_with_receiver(receiver: Receiver<Result<String, String>>) -> Result<()> {
+pub fn show_result_with_receiver(
+    receiver: Receiver<Result<String, String>>,
+    is_translating: Option<Arc<AtomicBool>>,
+) -> Result<()> {
     let (cursor_x, cursor_y) = get_cursor_position();
 
     let options = eframe::NativeOptions {
@@ -107,6 +131,7 @@ pub fn show_result_with_receiver(receiver: Receiver<Result<String, String>>) -> 
         state: ContentState::Loading,
         receiver: Some(receiver),
         markdown_cache: CommonMarkCache::default(),
+        is_translating,
     };
 
     eframe::run_native(
@@ -126,5 +151,5 @@ pub fn show_result_with_receiver(receiver: Receiver<Result<String, String>>) -> 
 pub fn show_result(content: &str) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     let _ = tx.send(Ok(content.to_string()));
-    show_result_with_receiver(rx)
+    show_result_with_receiver(rx, None)
 }
