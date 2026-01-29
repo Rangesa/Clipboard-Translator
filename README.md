@@ -3,6 +3,7 @@
 [![Rust](https://img.shields.io/badge/built_with-Rust-dca282.svg?logo=rust)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6.svg?logo=windows)](https://www.microsoft.com/windows/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Download](https://img.shields.io/github/v/release/Rangesa/Clipboard-Translator?label=Download&logo=github)](https://github.com/Rangesa/Clipboard-Translator/releases)
 
 **Windows作業を加速する、AI搭載クリップボード翻訳ツール**
 
@@ -34,6 +35,10 @@
   - シングルインスタンス制限で多重起動を防止
 
 ## インストール
+
+### 方法 0: 実行ファイルをダウンロード（推奨）
+
+[Releasesページ](https://github.com/Rangesa/Clipboard-Translator/releases) から最新の `clipboard-translator.exe` をダウンロードし、好きな場所に保存して実行するだけです。
 
 ### 方法 1: ソースコードからビルド
 

@@ -192,6 +192,7 @@ impl eframe::App for SetupApp {
                                 alt: modifiers.alt,
                                 shift: modifiers.shift,
                                 key_code: vk_code,
+                                is_double_press: false, // 手動設定時はシングルプレス
                             };
                             self.listening_for_hotkey = false;
                         }
@@ -332,6 +333,11 @@ impl eframe::App for SetupApp {
                     self.hotkey = Hotkey::default();
                     self.listening_for_hotkey = false;
                 }
+            });
+
+            ui.horizontal(|ui| {
+                ui.add_space(80.0);
+                ui.checkbox(&mut self.hotkey.is_double_press, "ダブルプレス（例: Ctrl+C+C）");
             });
 
             ui.add_space(10.0);

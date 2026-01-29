@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::Security::Credentials::{
-    CredDeleteW, CredReadW, CredWriteW, CREDENTIALW, CREDENTIAL_ATTRIBUTEW, CRED_FLAGS,
+    CredReadW, CredWriteW, CREDENTIALW, CREDENTIAL_ATTRIBUTEW, CRED_FLAGS,
     CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
 };
 
@@ -63,27 +63,6 @@ pub fn load_api_key() -> Result<String> {
 
         Ok(api_key)
     }
-}
-
-/// Windows Credential ManagerからAPIキーを削除
-pub fn delete_api_key() -> Result<()> {
-    unsafe {
-        let target_name = encode_wide(TARGET_NAME);
-        CredDeleteW(
-            PCWSTR(target_name.as_ptr()),
-            CRED_TYPE_GENERIC,
-            0,
-        )
-        .ok()
-        .context("Failed to delete credential")?;
-    }
-
-    Ok(())
-}
-
-/// APIキーが保存されているかチェック
-pub fn has_api_key() -> bool {
-    load_api_key().is_ok()
 }
 
 /// UTF-16に変換（null終端付き）

@@ -39,16 +39,19 @@ pub struct Hotkey {
     pub alt: bool,
     pub shift: bool,
     pub key_code: i32, // Windows VK code
+    #[serde(default)]
+    pub is_double_press: bool, // ダブルプレス検出（例: Ctrl+C+C）
 }
 
 impl Default for Hotkey {
     fn default() -> Self {
-        // デフォルトは Ctrl+C (VK_C = 0x43)
+        // デフォルトは Ctrl+C+C (ダブルプレス)
         Self {
             ctrl: true,
             alt: false,
             shift: false,
             key_code: 0x43, // VK_C
+            is_double_press: true,
         }
     }
 }
@@ -80,7 +83,15 @@ impl Hotkey {
         };
 
         parts.push(&key_name);
-        parts.join("+")
+
+        let result = parts.join("+");
+
+        // ダブルプレスの場合は表記を追加
+        if self.is_double_press {
+            format!("{}+{}", result, key_name)
+        } else {
+            result
+        }
     }
 }
 
