@@ -81,6 +81,7 @@ struct SetupApp {
     error_message: Option<String>,
     api_key_validated: bool,
     saved: bool,
+    startup_enabled: bool,
 }
 
 impl SetupApp {
@@ -101,6 +102,7 @@ impl SetupApp {
             error_message: None,
             api_key_validated: false,
             saved: false,
+            startup_enabled: crate::startup::is_installed(),
         }
     }
 
@@ -340,6 +342,14 @@ impl eframe::App for SetupApp {
                 ui.checkbox(&mut self.hotkey.is_double_press, "ダブルプレス（例: Ctrl+C+C）");
             });
 
+            ui.add_space(15.0);
+
+            // 自動スタートアップ設定
+            ui.horizontal(|ui| {
+                ui.label("自動起動:");
+                ui.checkbox(&mut self.startup_enabled, "Windows起動時に自動で起動する");
+            });
+
             ui.add_space(10.0);
             ui.hyperlink_to(
                 "Google AI Studio でAPIキーを取得",
@@ -378,8 +388,19 @@ impl eframe::App for SetupApp {
 
                             match config::save(&config) {
                                 Ok(_) => {
-                                    self.saved = true;
-                                    self.error_message = None;
+                                    // スタートアップ設定を適用
+                                    let startup_result = if self.startup_enabled {
+                                        crate::startup::install_startup()
+                                    } else {
+                                        crate::startup::uninstall_startup()
+                                    };
+
+                                    if let Err(e) = startup_result {
+                                        self.error_message = Some(format!("スタートアップ設定エラー: {}", e));
+                                    } else {
+                                        self.saved = true;
+                                        self.error_message = None;
+                                    }
                                 }
                                 Err(e) => {
                                     self.error_message = Some(format!("保存エラー: {}", e));
